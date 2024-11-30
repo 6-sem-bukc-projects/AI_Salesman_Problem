@@ -1,15 +1,14 @@
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QGraphicsScene, QGraphicsView,
-    QGraphicsEllipseItem, QGraphicsLineItem, QVBoxLayout, QPushButton, 
-    QInputDialog, QGraphicsTextItem, QWidget
+    QGraphicsEllipseItem, QGraphicsLineItem, QVBoxLayout, QPushButton,
+    QInputDialog, QGraphicsTextItem, QWidget, QGraphicsItem
 )
 from PyQt5.QtGui import QPen, QPainter
-from PyQt5.QtCore import Qt, QPointF
+from PyQt5.QtCore import Qt
 
-import sys
 
 class DraggableNode(QGraphicsEllipseItem):
-    def __init__(self, x, y, name, scene, parent=None):
+    def __init__(self, name, scene, tsp_app, parent=None):
         super().__init__(-10, -10, 20, 20, parent)
         self.setBrush(Qt.yellow)
         self.setFlag(QGraphicsEllipseItem.ItemIsMovable, True)
@@ -17,17 +16,31 @@ class DraggableNode(QGraphicsEllipseItem):
         self.setFlag(QGraphicsEllipseItem.ItemSendsGeometryChanges, True)
         self.name = name
         self.scene = scene
+        self.tsp_app = tsp_app
+
+        # Store connected edges
+        self.connected_edges = []
 
         # Add label
         self.label = QGraphicsTextItem(name, self)
         self.label.setPos(10, 10)
 
+    def add_edge(self, edge):
+        """Add an edge to the node's connections."""
+        self.connected_edges.append(edge)
+
     def itemChange(self, change, value):
-        if change == QGraphicsEllipseItem.ItemPositionChange:
-            # Update edges connected to this node
-            for edge in self.scene.edges:
+        if change == QGraphicsItem.ItemPositionChange:
+            # Notify all connected edges to update their positions
+            for edge in self.connected_edges:
                 edge.update_position()
         return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            # Notify TSPApp about the right-click on this node
+            self.tsp_app.handle_node_right_click(self)
+        super().mousePressEvent(event)
 
 class Edge(QGraphicsLineItem):
     def __init__(self, node1, node2, weight, scene, parent=None):
@@ -37,8 +50,17 @@ class Edge(QGraphicsLineItem):
         self.weight = weight
         self.scene = scene
 
+        # Add the edge to the scene
+        self.scene.addItem(self)
+
         # Add weight label
-        self.weight_label = QGraphicsTextItem(str(weight), self.scene)
+        self.weight_label = QGraphicsTextItem(str(weight))
+        self.scene.addItem(self.weight_label)
+
+        # Register this edge with the nodes
+        self.node1.add_edge(self)
+        self.node2.add_edge(self)
+
         self.update_position()
 
     def update_position(self):
@@ -51,6 +73,7 @@ class Edge(QGraphicsLineItem):
         mid_x = (pos1.x() + pos2.x()) / 2
         mid_y = (pos1.y() + pos2.y()) / 2
         self.weight_label.setPos(mid_x, mid_y)
+
 
 class TSPApp(QMainWindow):
     def __init__(self):
@@ -79,68 +102,61 @@ class TSPApp(QMainWindow):
         self.add_node_button.clicked.connect(self.add_node_mode)
         layout.addWidget(self.add_node_button)
 
-        self.add_edge_button = QPushButton("Add Edge")
-        self.add_edge_button.clicked.connect(self.add_edge_mode)
-        layout.addWidget(self.add_edge_button)
-
         self.clear_button = QPushButton("Clear Canvas")
         self.clear_button.clicked.connect(self.clear_canvas)
         layout.addWidget(self.clear_button)
 
         # State
         self.adding_node = False
-        self.adding_edge = False
-        self.selected_nodes = []
+        self.start_node = None
 
     def add_node_mode(self):
         self.adding_node = True
-        self.adding_edge = False
-
-    def add_edge_mode(self):
-        self.adding_node = False
-        self.adding_edge = True
 
     def clear_canvas(self):
         self.scene.clear()
         self.nodes.clear()
         self.edges.clear()
+        self.start_node = None
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            pos = self.view.mapToScene(event.pos())
-            if self.adding_node:
-                self.add_node(pos)
-            elif self.adding_edge:
-                self.select_node_for_edge(pos)
+        pos = self.view.mapToScene(event.pos())
+        if event.button() == Qt.LeftButton and self.adding_node:
+            self.add_node(pos)
 
     def add_node(self, pos):
         name, ok = QInputDialog.getText(self, "Node Name", "Enter node name:")
         if ok and name and name not in self.nodes:
-            node = DraggableNode(pos.x(), pos.y(), name, self.scene)
+            node = DraggableNode(name, self.scene, self)
             node.setPos(pos)
             self.scene.addItem(node)
             self.nodes[name] = node
 
-    def select_node_for_edge(self, pos):
-        for node_name, node_item in self.nodes.items():
-            node_pos = node_item.scenePos()
-            if abs(pos.x() - node_pos.x()) < 15 and abs(pos.y() - node_pos.y()) < 15:
-                self.selected_nodes.append(node_item)
-                if len(self.selected_nodes) == 2:
-                    self.create_edge()
-                break
+    def handle_node_right_click(self, clicked_node):
+        if not self.start_node:
+            # Start edge creation
+            self.start_node = clicked_node
+        elif self.start_node != clicked_node:
+            # Finish edge creation
+            self.create_edge(self.start_node, clicked_node)
+            self.start_node = None  # Reset start node after creating edge
+        else:
+            # Reset edge creation if clicked on the same node
+            self.start_node = None
 
-    def create_edge(self):
-        node1, node2 = self.selected_nodes
+    def create_edge(self, node1, node2):
         weight, ok = QInputDialog.getInt(self, "Edge Weight", f"Enter weight for edge {node1.name} - {node2.name}:")
         if ok:
+            # Create the edge
             edge = Edge(node1, node2, weight, self.scene)
             self.scene.addItem(edge)
             self.edges.append(edge)
-        self.selected_nodes.clear()
+            # Register the edge with both nodes
+            node1.add_edge(edge)
+            node2.add_edge(edge)
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
+    app = QApplication([])
     window = TSPApp()
     window.show()
-    sys.exit(app.exec_())
+    app.exec_()
