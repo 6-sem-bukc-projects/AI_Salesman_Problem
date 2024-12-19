@@ -8,6 +8,7 @@ from PyQt5.QtGui import QIcon, QPainter
 from PyQt5.QtCore import Qt, QPointF
 from enum import Enum
 import csv
+from TravelingSalesmanSolver import TravelingSalesmanSolver
 
 class Mode(Enum):
     NODE_SELECTION = 1
@@ -127,6 +128,33 @@ class TSPApp(QMainWindow):
         export_action = QAction(QIcon("icons/export.png"), "Export Graph", self)
         export_action.triggered.connect(self.export_graph)
         toolbar.addAction(export_action)
+
+        # Solve 
+        solve_action = QAction(QIcon("icons/solve.png"), "Solve TSP", self)
+        solve_action.triggered.connect(self.solve_tsp)
+        toolbar.addAction(solve_action)
+
+    def solve_tsp(self):
+        if len(self.nodes) <= 2:
+            print("Not enough nodes to solve the TSP.")
+            return
+
+        # Extract node positions and edges for the solver
+        nodes = {name: node.pos() for name, node in self.nodes.items()}
+        edges = [(edge.node1.name, edge.node2.name, edge.weight) for edge in self.edges]
+
+        # Solve TSP using ACO
+        solver = TravelingSalesmanSolver(nodes, edges)
+        result = solver.solve()
+
+        # Display the result
+        if result["solution"] is None:
+            print(result["message"])
+        else:
+            print(f"Best Path: {result['solution']}")
+            print(f"Best Cost: {result['cost']}")
+            print(f"Iterations: {result['iterations']}")
+            print(f"Time Taken: {result['time_taken']:.2f} seconds")
 
     def import_graph(self):
         """Import graph from a CSV file."""
