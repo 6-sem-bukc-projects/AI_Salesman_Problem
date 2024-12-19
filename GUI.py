@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QIcon, QPainter
 from PyQt5.QtCore import Qt, QPointF
 from enum import Enum
+import csv
 
 class Mode(Enum):
     NODE_SELECTION = 1
@@ -115,6 +116,52 @@ class TSPApp(QMainWindow):
         create_action("icons/add_edge.png", Mode.EDGE_CREATION, "Create Edges")
         create_action("icons/delete.png", Mode.NODE_DELETION, "Delete Nodes")
 
+        # Add separator
+        toolbar.addSeparator()
+
+        # Import/Export Actions
+        import_action = QAction(QIcon("icons/import.png"), "Import Graph", self)
+        import_action.triggered.connect(self.import_graph)
+        toolbar.addAction(import_action)
+
+        export_action = QAction(QIcon("icons/export.png"), "Export Graph", self)
+        export_action.triggered.connect(self.export_graph)
+        toolbar.addAction(export_action)
+
+    def import_graph(self):
+        """Import graph from a CSV file."""
+        from PyQt5.QtWidgets import QFileDialog
+        file_name, _ = QFileDialog.getOpenFileName(self, "Import Graph", "", "CSV Files (*.csv);;All Files (*)")
+        if file_name:
+            self.scene.clear()
+            self.nodes.clear()
+            self.edges.clear()
+
+            with open(file_name, "r") as file:
+                reader = csv.reader(file)
+                for row in reader:
+                    if row[0] == "NODE":
+                        name, x, y = row[1], float(row[2]), float(row[3])
+                        self.add_node(QPointF(x, y), name=name)
+                    elif row[0] == "EDGE":
+                        node1, node2, weight = row[1], row[2], int(row[3])
+                        self.create_edge(self.nodes[node1], self.nodes[node2], weight)
+
+    def export_graph(self):
+        """Export graph to a CSV file."""
+        from PyQt5.QtWidgets import QFileDialog
+        file_name, _ = QFileDialog.getSaveFileName(self, "Export Graph", "", "CSV Files (*.csv);;All Files (*)")
+        if file_name:
+            with open(file_name, "w", newline="") as file:
+                writer = csv.writer(file)
+                # Write nodes
+                for name, node in self.nodes.items():
+                    x, y = node.scenePos().x(), node.scenePos().y()
+                    writer.writerow(["NODE", name, x, y])
+                # Write edges
+                for edge in self.edges:
+                    writer.writerow(["EDGE", edge.node1.name, edge.node2.name, edge.weight])
+
     def set_mode(self, mode):
         self.mode = mode
         if mode == Mode.NODE_SELECTION:
@@ -140,13 +187,17 @@ class TSPApp(QMainWindow):
             elif self.mode == Mode.NODE_DELETION:
                 self.handle_node_deletion(scene_pos)
 
-    def add_node(self, pos):
-        name, ok = QInputDialog.getText(self, "Node Name", "Enter node name:")
-        if ok and name and name not in self.nodes:
-            node = DraggableNode(name, self.scene, self)
-            node.setPos(pos)
-            self.scene.addItem(node)
-            self.nodes[name] = node
+    def add_node(self, pos, name=None):
+        if name is None:
+            name, ok = QInputDialog.getText(self, "Node Name", "Enter node name:")
+            if not ok or not name or name in self.nodes:
+                return
+        node = DraggableNode(name, self.scene, self)
+        node.setPos(pos)
+        self.scene.addItem(node)
+        self.nodes[name] = node
+
+    
 
     def handle_edge_creation(self, scene_pos):
         # Detect the item at the clicked position
@@ -175,15 +226,15 @@ class TSPApp(QMainWindow):
                 self.start_node.setBrush(Qt.yellow)  # Reset original color
             self.start_node = None
 
-    def create_edge(self, node1, node2):
-        # Prompt the user to enter the weight of the edge
-        weight, ok = QInputDialog.getInt(
-            self, "Edge Weight", f"Enter weight for edge {node1.name} - {node2.name}:"
-        )
-        if ok:
-            # Create and add the edge to the scene
-            edge = Edge(node1, node2, weight, self.scene)
-            self.edges.append(edge)
+    def create_edge(self, node1, node2, weight=None):
+        if weight is None:
+            weight, ok = QInputDialog.getInt(
+                self, "Edge Weight", f"Enter weight for edge {node1.name} - {node2.name}:"
+            )
+            if not ok:
+                return
+        edge = Edge(node1, node2, weight, self.scene)
+        self.edges.append(edge)
 
     def handle_node_deletion(self, scene_pos):
         # Detect the item at the clicked position
