@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QToolBar, QAction, QGraphicsTextItem, QInputDialog, QWidget, QGraphicsItem,
     QActionGroup
 )
-from PyQt5.QtGui import QIcon, QPainter
+from PyQt5.QtGui import QIcon, QPainter, QPen
 from PyQt5.QtCore import Qt, QPointF
 from enum import Enum
 import csv
@@ -34,14 +34,10 @@ class DraggableNode(QGraphicsEllipseItem):
         self.connected_edges.append(edge)
 
     def remove_edges(self):
-        """Remove all edges connected to this node."""
         for edge in self.connected_edges[:]:
-            # Remove the edge from the scene
             edge.remove_from_scene()
-            # Remove the edge from the other connected node
             other_node = edge.node1 if edge.node2 == self else edge.node2
             other_node.connected_edges.remove(edge)
-            # Remove the edge from the TSP app's edge list
             self.tsp_app.edges.remove(edge)
         self.connected_edges.clear()
 
@@ -64,6 +60,17 @@ class Edge(QGraphicsLineItem):
         self.node1.add_edge(self)
         self.node2.add_edge(self)
         self.update_position()
+        self.highlighted = False
+        self.setPen(QPen(Qt.black, 1))
+
+    def set_highlighted(self, highlighted):
+   
+        self.highlighted = highlighted
+        if highlighted:
+            self.setPen(QPen(Qt.red, 3))  
+        else:
+            self.setPen(QPen(Qt.black, 1)) 
+
 
     def update_position(self):
         pos1 = self.node1.scenePos()
@@ -74,7 +81,6 @@ class Edge(QGraphicsLineItem):
         self.weight_label.setPos(mid_x, mid_y)
 
     def remove_from_scene(self):
-        """Removes the edge and its label from the scene."""
         self.scene.removeItem(self)
         self.scene.removeItem(self.weight_label)
 
@@ -117,10 +123,8 @@ class TSPApp(QMainWindow):
         create_action("icons/add_edge.png", Mode.EDGE_CREATION, "Create Edges")
         create_action("icons/delete.png", Mode.NODE_DELETION, "Delete Nodes")
 
-        # Add separator
         toolbar.addSeparator()
 
-        # Import/Export Actions
         import_action = QAction(QIcon("icons/import.png"), "Import Graph", self)
         import_action.triggered.connect(self.import_graph)
         toolbar.addAction(import_action)
@@ -129,35 +133,68 @@ class TSPApp(QMainWindow):
         export_action.triggered.connect(self.export_graph)
         toolbar.addAction(export_action)
 
-        # Solve 
         solve_action = QAction(QIcon("icons/solve.png"), "Solve TSP", self)
         solve_action.triggered.connect(self.solve_tsp)
         toolbar.addAction(solve_action)
 
     def solve_tsp(self):
-        if len(self.nodes) <= 2:
+        if len(self.nodes) < 2:
             print("Not enough nodes to solve the TSP.")
             return
 
-        # Extract node positions and edges for the solver
         nodes = {name: node.pos() for name, node in self.nodes.items()}
         edges = [(edge.node1.name, edge.node2.name, edge.weight) for edge in self.edges]
 
-        # Solve TSP using ACO
         solver = TravelingSalesmanSolver(nodes, edges)
         result = solver.solve()
 
-        # Display the result
+        self.clear_highlights()
+
         if result["solution"] is None:
             print(result["message"])
+            self.display_message("No solution exists.")
         else:
-            print(f"Best Path: {result['solution']}")
-            print(f"Best Cost: {result['cost']}")
-            print(f"Iterations: {result['iterations']}")
-            print(f"Time Taken: {result['time_taken']:.2f} seconds")
+            self.highlight_path(result["solution"])
+
+            metrics = (
+                f"Best Path: {' -> '.join(result['solution'])}\n"
+                f"Cost: {result['cost']}\n"
+                f"Iterations: {result['iterations']}\n"
+                f"Time Taken: {result['time_taken']:.2f} seconds"
+            )
+            self.display_message(metrics)
+
+    def highlight_path(self, path):
+        """
+        Highlight the edges in the solution path.
+
+        Args:
+            path (list): List of nodes in the optimal path.
+        """
+        for i in range(len(path) - 1):
+            start_node = path[i]
+            end_node = path[i + 1]
+
+            for edge in self.edges:
+                if (edge.node1.name == start_node and edge.node2.name == end_node) or \
+                (edge.node1.name == end_node and edge.node2.name == start_node):
+                    edge.set_highlighted(True)  
+                    break
+
+        self.scene.update()
+
+    def clear_highlights(self):
+
+        for edge in self.edges:
+            edge.set_highlighted(False)
+        self.scene.update()
+
+    def display_message(self, message):
+
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.information(self, "TSP Solution", message)
 
     def import_graph(self):
-        """Import graph from a CSV file."""
         from PyQt5.QtWidgets import QFileDialog
         file_name, _ = QFileDialog.getOpenFileName(self, "Import Graph", "", "CSV Files (*.csv);;All Files (*)")
         if file_name:
@@ -176,17 +213,14 @@ class TSPApp(QMainWindow):
                         self.create_edge(self.nodes[node1], self.nodes[node2], weight)
 
     def export_graph(self):
-        """Export graph to a CSV file."""
         from PyQt5.QtWidgets import QFileDialog
         file_name, _ = QFileDialog.getSaveFileName(self, "Export Graph", "", "CSV Files (*.csv);;All Files (*)")
         if file_name:
             with open(file_name, "w", newline="") as file:
                 writer = csv.writer(file)
-                # Write nodes
                 for name, node in self.nodes.items():
                     x, y = node.scenePos().x(), node.scenePos().y()
                     writer.writerow(["NODE", name, x, y])
-                # Write edges
                 for edge in self.edges:
                     writer.writerow(["EDGE", edge.node1.name, edge.node2.name, edge.weight])
 
@@ -203,7 +237,6 @@ class TSPApp(QMainWindow):
             node.setFlag(QGraphicsEllipseItem.ItemIsSelectable, enable)
 
     def mousePressEvent(self, event):
-        # Map the event position to the view's coordinates
         view_pos = self.view.mapFromGlobal(self.mapToGlobal(event.pos()))
         scene_pos = self.view.mapToScene(view_pos)
 
@@ -228,30 +261,24 @@ class TSPApp(QMainWindow):
     
 
     def handle_edge_creation(self, scene_pos):
-        # Detect the item at the clicked position
         clicked_item = self.scene.itemAt(scene_pos, self.view.transform())
         print(f"Clicked Item: {clicked_item}, Type: {type(clicked_item)}")
         
-        # Traverse up the hierarchy to check for a DraggableNode
         while clicked_item and not isinstance(clicked_item, DraggableNode):
             clicked_item = clicked_item.parentItem()
 
         if isinstance(clicked_item, DraggableNode):
-            # If no start node is set, set the clicked node as start_node
             if not self.start_node:
                 self.start_node = clicked_item
-                clicked_item.setBrush(Qt.green)  # Highlight the selected node
+                clicked_item.setBrush(Qt.green)  
             else:
-                # If start_node is already set, create edge if nodes are distinct
                 if self.start_node != clicked_item:
                     self.create_edge(self.start_node, clicked_item)
-                # Reset the start_node (even if clicked on the same node)
-                self.start_node.setBrush(Qt.yellow)  # Reset original color
+                self.start_node.setBrush(Qt.yellow)
                 self.start_node = None
         else:
-            # If clicked outside any node, reset start_node
             if self.start_node:
-                self.start_node.setBrush(Qt.yellow)  # Reset original color
+                self.start_node.setBrush(Qt.yellow) 
             self.start_node = None
 
     def create_edge(self, node1, node2, weight=None):
@@ -265,16 +292,13 @@ class TSPApp(QMainWindow):
         self.edges.append(edge)
 
     def handle_node_deletion(self, scene_pos):
-        # Detect the item at the clicked position
         clicked_item = self.scene.itemAt(scene_pos, self.view.transform())
         
         if isinstance(clicked_item, DraggableNode):
-            # If it's a node, remove the node and its connected edges
             clicked_item.remove_edges()
             self.scene.removeItem(clicked_item)
             del self.nodes[clicked_item.name]
         elif isinstance(clicked_item, Edge):
-            # If it's an edge, remove it cleanly (edge + label)
             clicked_item.node1.connected_edges.remove(clicked_item)
             clicked_item.node2.connected_edges.remove(clicked_item)
             clicked_item.remove_from_scene()
