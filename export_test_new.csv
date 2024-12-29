@@ -1,4 +1,12 @@
-Node1,Node2,Weight
-b,a,1
-a,c,14
-b,d,3
+NODE,a,-135.0,-155.0
+NODE,b,-167.0,-108.0
+NODE,c,-351.0,-62.0
+NODE,d,-198.0,31.0
+NODE,e,-396.0,37.0
+EDGE,c,a,1
+EDGE,c,b,2
+EDGE,a,b,1
+EDGE,c,d,1
+EDGE,d,b,1
+EDGE,c,e,1
+EDGE,e,d,3

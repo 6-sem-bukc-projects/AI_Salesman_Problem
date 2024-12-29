@@ -1,21 +1,30 @@
-import math
 import random
 import time
+import numpy as np
 
 class TravelingSalesmanSolver:
-    def __init__(self, nodes, edges, num_ants=10, num_iterations=100, alpha=1.0, beta=2.0, evaporation_rate=0.5):
-        """
-        Initialize the Traveling Salesman Solver using Ant Colony Optimization.
+    def __init__(
+        self,
+        nodes,
+        edges,
+        num_ants = 20,
+        num_iterations = 150,
+        alpha = 1.0,
+        beta = 2.5,
+        evaporation_rate = 0.1,
+        initial_pheromone = 0.1
+    ):
 
-        Args:
-            nodes (dict): Dictionary of nodes with names as keys and positions as values.
-            edges (list): List of tuples (node1, node2, weight) representing the edges.
-            num_ants (int): Number of ants.
-            num_iterations (int): Number of iterations for the ACO algorithm.
-            alpha (float): Influence of pheromone on decision-making.
-            beta (float): Influence of edge weight on decision-making.
-            evaporation_rate (float): Rate at which pheromones evaporate.
-        """
+
+        if num_ants <= 0 or num_iterations <= 0:
+            raise ValueError("num_ants and num_iterations must be positive")
+        if alpha < 0 or beta < 0:
+            raise ValueError("alpha and beta must be non-negative")
+        if not 0 <= evaporation_rate <= 1:
+            raise ValueError("evaporation_rate must be between 0 and 1")
+        if initial_pheromone <= 0:
+            raise ValueError("initial_pheromone must be positive")
+
         self.nodes = nodes
         self.edges = edges
         self.num_ants = num_ants
@@ -23,127 +32,147 @@ class TravelingSalesmanSolver:
         self.alpha = alpha
         self.beta = beta
         self.evaporation_rate = evaporation_rate
+        self.initial_pheromone = initial_pheromone
 
-        # Create a distance and pheromone matrix
         self.node_names = list(nodes.keys())
+        self.node_indices = {name: i for i, name in enumerate(self.node_names)}
         self.num_nodes = len(self.node_names)
-        self.distances = [[float('inf')] * self.num_nodes for _ in range(self.num_nodes)]
-        self.pheromones = [[1.0] * self.num_nodes for _ in range(self.num_nodes)]
+        
+        self.distances = np.full((self.num_nodes, self.num_nodes), float('inf'))
+        self.pheromones = np.full((self.num_nodes, self.num_nodes), initial_pheromone)
 
-        # Initialize distances based on edges
-        self._initialize_distances()
+        self._initialize_matrices()
+        
+        self._probability_cache = {}
 
-    def _initialize_distances(self):
+    def _initialize_matrices(self):
         for edge in self.edges:
             node1, node2, weight = edge
-            i = self.node_names.index(node1)
-            j = self.node_names.index(node2)
+            i = self.node_indices[node1]
+            j = self.node_indices[node2]
             self.distances[i][j] = weight
-            self.distances[j][i] = weight
+            self.distances[j][i] = weight 
+
+        self.visibility = np.zeros_like(self.distances)
+        mask = self.distances != float('inf')
+        self.visibility[mask] = 1.0 / self.distances[mask]
 
     def _probability(self, i, j):
-        pheromone = self.pheromones[i][j] ** self.alpha
-        visibility = (1.0 / self.distances[i][j]) ** self.beta
-        return pheromone * visibility
+        cache_key = (i, j)
+        if cache_key not in self._probability_cache:
+            self._probability_cache[cache_key] = (
+                self.pheromones[i][j] ** self.alpha * 
+                self.visibility[i][j] ** self.beta
+            )
+        return self._probability_cache[cache_key]
 
-    def _choose_next_node(self, current_node, visited):
-        current_index = self.node_names.index(current_node)
+    def _choose_next_node(self, current_index: int, unvisited):
+        if not unvisited:
+            return None
+
         probabilities = []
-        for j in range(self.num_nodes):
-            if self.node_names[j] not in visited and self.distances[current_index][j] < float('inf'):
-                probabilities.append(self._probability(current_index, j))
+        nodes = list(unvisited)
+        
+        total_probability = 0
+        for j in nodes:
+            if self.distances[current_index][j] != float('inf'):
+                prob = self._probability(current_index, j)
+                probabilities.append(prob)
+                total_probability += prob
             else:
                 probabilities.append(0)
 
-        total_probability = sum(probabilities)
         if total_probability == 0:
             return None
-        probabilities = [p / total_probability for p in probabilities]
 
-        # Choose the next node based on probabilities
-        next_index = random.choices(range(self.num_nodes), probabilities)[0]
-        return self.node_names[next_index]
+        r = random.random() * total_probability
+        cumsum = 0
+        for j, prob in zip(nodes, probabilities):
+            cumsum += prob
+            if cumsum >= r:
+                return j
 
-    def _update_pheromones(self, paths, costs):
-        # Evaporate pheromones
+        return nodes[-1] 
+
+    def _update_pheromones(self, paths, costs) -> None:
+        self._probability_cache.clear()
+
         for i in range(self.num_nodes):
-            for j in range(self.num_nodes):
+            for j in range(i + 1, self.num_nodes):  
                 self.pheromones[i][j] *= (1 - self.evaporation_rate)
+                self.pheromones[j][i] = self.pheromones[i][j]
 
-        # Add pheromones based on the paths
+        min_cost = min(costs)
         for path, cost in zip(paths, costs):
+            deposit = 1.0 / cost
+            if cost == min_cost:
+                deposit *= 2 
+
             for i in range(len(path) - 1):
-                start = self.node_names.index(path[i])
-                end = self.node_names.index(path[i + 1])
-                self.pheromones[start][end] += 1.0 / cost
-                self.pheromones[end][start] += 1.0 / cost
+                start, end = path[i], path[i + 1]
+                self.pheromones[start][end] += deposit
+                self.pheromones[end][start] = self.pheromones[start][end]
 
     def solve(self):
+      
         best_path = None
         best_cost = float('inf')
         start_time = time.time()
-
+        stagnation_counter = 0
+        
         for iteration in range(self.num_iterations):
             paths = []
             costs = []
+            iteration_best_cost = float('inf')
 
             for _ in range(self.num_ants):
-                visited = []
-                current_node = random.choice(self.node_names)
-                visited.append(current_node)
-
-                while len(visited) < self.num_nodes:
-                    next_node = self._choose_next_node(current_node, visited)
-                    if next_node is None:
+                current_index = random.randrange(self.num_nodes)
+                unvisited = set(range(self.num_nodes)) - {current_index}
+                path = [current_index]
+                
+                while unvisited:
+                    next_index = self._choose_next_node(current_index, unvisited)
+                    if next_index is None:
                         break
-                    visited.append(next_node)
-                    current_node = next_node
+                    path.append(next_index)
+                    unvisited.remove(next_index)
+                    current_index = next_index
 
-                # Complete the tour by returning to the starting node
-                if len(visited) == self.num_nodes:
-                    last_node = visited[-1]
-                    first_node = visited[0]
-                    last_index = self.node_names.index(last_node)
-                    first_index = self.node_names.index(first_node)
-                    if self.distances[last_index][first_index] < float('inf'):
-                        visited.append(first_node)
-                    else:
-                        continue  # Skip this tour since it cannot complete a valid cycle
-
-                # Calculate the cost of the path
-                if len(visited) == self.num_nodes + 1:  # Valid complete tour
-                    cost = sum(
-                        self.distances[self.node_names.index(visited[i])][self.node_names.index(visited[i + 1])]
-                        for i in range(len(visited) - 1)
-                    )
-                    paths.append(visited)
+                if not unvisited and self.distances[path[-1]][path[0]] != float('inf'):
+                    path.append(path[0])
+                    cost = sum(self.distances[path[i]][path[i + 1]] 
+                             for i in range(len(path) - 1))
+                    
+                    paths.append(path)
                     costs.append(cost)
+                    iteration_best_cost = min(iteration_best_cost, cost)
 
-                    # Update the best solution
                     if cost < best_cost:
                         best_cost = cost
-                        best_path = visited
-
-            # Update pheromones
+                        best_path = path
+                        stagnation_counter = 0
+                    
             if paths:
                 self._update_pheromones(paths, costs)
+            
+            stagnation_counter += 1
+            if stagnation_counter >= 20:  
+                for i in range(self.num_nodes):
+                    for j in range(i + 1, self.num_nodes):
+                        if random.random() < 0.1: 
+                            self.pheromones[i][j] = self.initial_pheromone
+                            self.pheromones[j][i] = self.initial_pheromone
+                stagnation_counter = 0
 
         end_time = time.time()
 
-        # If no valid path found
-        if best_path is None:
-            return {
-                "solution": None,
-                "cost": None,
-                "iterations": iteration + 1,
-                "time_taken": end_time - start_time,
-                "message": "No solution exists. The graph does not allow a complete tour."
-            }
+        named_path = [self.node_names[i] for i in best_path] if best_path else None
 
         return {
-            "solution": best_path,
-            "cost": best_cost,
+            "solution": named_path,
+            "cost": best_cost if best_cost != float('inf') else None,
             "iterations": iteration + 1,
             "time_taken": end_time - start_time,
-            "message": "Solution found successfully."
+            "message": "Solution found successfully." if best_path else 
+                      "No solution exists. The graph does not allow a complete tour."
         }
